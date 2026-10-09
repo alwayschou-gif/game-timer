@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>遊戲建築升級提醒器</title>
+  <title>遊戲建築升級提醒器 (雲端同步版)</title>
+  <!-- 載入 Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f8; margin: 0; padding: 20px; }
     .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
@@ -20,12 +23,14 @@
     .time-left { font-size: 18px; font-weight: bold; color: #d9534f; }
     .del-btn { background: #dc3545; padding: 6px 10px; font-size: 12px; }
     .del-btn:hover { background: #c82333; }
+    .status { text-align: center; font-size: 12px; color: #666; margin-bottom: 10px; }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h2>🏰 建築升級提醒器</h2>
+  <h2>🏰 建築升級提醒器 (跨裝置同步)</h2>
+  <div class="status" id="status">正在連接雲端資料庫...</div>
   
   <div class="form-group">
     <input type="text" id="account" placeholder="帳號名稱 (如: 帳號A)">
@@ -39,16 +44,29 @@
 </div>
 
 <script>
-  let timers = JSON.parse(localStorage.getItem('game_timers') || '[]');
+  // ⚠️ 請把這裡替換成你在 Firebase 看到的資料庫網址 ⚠️
+  const FIREBASE_DB_URL = "https://game-timer-2929e-default-rtdb.firebaseio.com/";
 
-  // 請求通知權限
+  // 初始化 Firebase
+  firebase.initializeApp({ databaseURL: FIREBASE_DB_URL });
+  const db = firebase.database().ref("timers");
+
+  let timers = [];
+
+  // 請求推播通知權限
   if ("Notification" in window && Notification.permission !== "granted") {
     Notification.requestPermission();
   }
 
-  function saveTimers() {
-    localStorage.setItem('game_timers', JSON.stringify(timers));
-  }
+  // 監聽雲端資料庫變更（電腦/手機任何一方更新，另一方會立刻收到改變）
+  db.on('value', (snapshot) => {
+    const data = snapshot.val();
+    timers = data ? Object.keys(data).map(key => ({ id: key, ...data[key] })) : [];
+    document.getElementById('status').innerText = '🟢 已連線至雲端 (電腦與手機同步中)';
+    renderTimers();
+  }, (error) => {
+    document.getElementById('status').innerText = '🔴 連線失敗，請檢查 Firebase 網址設定';
+  });
 
   function addTimer() {
     const account = document.getElementById('account').value.trim() || '主帳號';
@@ -60,17 +78,22 @@
     if (totalMs <= 0) return alert('請輸入有效的升級時間！');
 
     const targetTime = Date.now() + totalMs;
-    const newTimer = { id: Date.now(), account, building, targetTime, notified: false };
 
-    timers.push(newTimer);
-    saveTimers();
-    renderTimers();
+    // 推送到雲端資料庫
+    db.push({
+      account,
+      building,
+      targetTime,
+      notified: false
+    });
+
+    // 清空輸入框
+    document.getElementById('hours').value = 0;
+    document.getElementById('minutes').value = 0;
   }
 
   function deleteTimer(id) {
-    timers = timers.filter(t => t.id !== id);
-    saveTimers();
-    renderTimers();
+    db.child(id).remove();
   }
 
   function formatTimeLeft(ms) {
@@ -91,7 +114,6 @@
   function renderTimers() {
     const listEl = document.getElementById('timer-list');
     listEl.innerHTML = '';
-
     const now = Date.now();
 
     timers.sort((a, b) => a.targetTime - b.targetTime);
@@ -101,8 +123,8 @@
       const isFinished = msLeft <= 0;
 
       if (isFinished && !t.notified) {
-        t.notified = true;
-        saveTimers();
+        // 更新雲端標記避免重複發送
+        db.child(t.id).update({ notified: true });
         sendNotification('⚔️ 建築升級完成！', `[${t.account}] 的 ${t.building} 已順利完工！`);
       }
 
@@ -118,7 +140,7 @@
         </div>
         <div>
           <span class="time-left">${formatTimeLeft(msLeft)}</span>
-          <button class="del-btn" onclick="deleteTimer(${t.id})">刪除</button>
+          <button class="del-btn" onclick="deleteTimer('${t.id}')">刪除</button>
         </div>
       `;
       listEl.appendChild(card);
@@ -126,7 +148,6 @@
   }
 
   setInterval(renderTimers, 1000);
-  renderTimers();
 </script>
 </body>
 </html>
